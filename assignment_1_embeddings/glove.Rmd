@@ -1,0 +1,141 @@
+---
+title: "glove"
+author: "Jia Hao"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import libraries
+
+```{r}
+library(text2vec)
+library(readr)
+library(stringr)
+library(ggplot2)
+```
+
+## Read and preprocess data
+
+```{r}
+df = read.csv(
+  '../data/twitter/processed.csv',
+  header=TRUE,
+  encoding='latin-1'
+)
+
+contents = df$processed_text[1:50000]
+
+# Remove square brackets and quotes
+df$processed_text <- str_remove_all(df$processed_text, "\\[|\\]|'")
+
+# Split by comma or space
+df$processed_text <- str_split(df$processed_text, ",\\s*")
+
+tokenized_sentences = df$processed_text
+```
+
+## Fitting the glove model
+
+```{r}
+# Create an iterator over the tokens
+it <- itoken(tokenized_sentences, progressbar = TRUE)
+
+# Build the vocabulary
+vocab <- create_vocabulary(it)
+
+# tune the model hyperparameters
+i = 1
+glove_vectors = list()
+for (window in c(5, 10, 15)){
+ for (rank in c(128, 256, 300)){
+    # Create a term-co-occurrence matrix (TCM)
+    tcm <- create_tcm(it, vectorizer = vocab_vectorizer(vocab), skip_grams_window = window)
+
+    # Define the GloVe model
+    glove <- GlobalVectors$new(rank = rank, x_max = 10)  # rank = embedding dimensions
+
+    print(paste("Window length: ", window, ", Vector dimensions: ", rank))
+
+    # Fit the GloVe model
+    word_vectors <- glove$fit_transform(tcm, n_iter = 10, convergence_tol = 0.01)
+
+    # Combine word and context embeddings (optional)
+    word_vectors <- word_vectors + t(glove$components)
+
+    glove_vectors[[i]] = word_vectors
+    i = i + 1
+ }
+}
+```
+
+## Analysis
+
+### Nearest Neighbours for selected words
+
+```{r}
+
+selected_words = c(
+    'sad',
+    'chocolate',
+    'chemistry',
+    'month',
+    'news'
+)
+
+for (wv in glove_vectors) {
+ for (word in selected_words) {
+    cat('Word is:', word, '\n')
+    
+    # Get vector for this word
+    vec <- wv[word, , drop = FALSE]
+    
+    # Compute cosine similarity with all other words
+    cos_sim = sim2(x = wv, y = vec, method = "cosine", norm = "l2")
+    # filter for words not the same as this word
+    cos_sim = cos_sim[rownames(cos_sim) != word, , drop = FALSE]
+    
+    print(head(sort(cos_sim[,1], decreasing = TRUE), 10))
+    
+    cat('\n')
+    
+  }
+  cat(strrep("*", 50), "\n")
+}
+```
+
+Based on qualitative analysis on the chosen words, best model parameters are: window length = 15, vector dimensions = 128.
+
+Nearest words for 'chemistry' and 'chocolate' do not really make much sense.
+
+## Visualization of PCA embedding space
+
+```{r}
+best_wv = glove_vectors[[7]]
+
+# Perform PCA on the full word vectors
+pca <- prcomp(best_wv, center = TRUE, scale. = TRUE)
+
+# Create a data frame with the first 2 principal components
+word_vectors_pca <- data.frame(pca$x[, 1:2])
+word_vectors_pca$word <- rownames(best_wv)
+
+# Randomly sample 200 words
+set.seed(123)  # for reproducibility
+word_vectors_pca_subset <- word_vectors_pca[sample(nrow(word_vectors_pca), 200), ]
+
+# Plot the embeddings
+ggplot(word_vectors_pca_subset, aes(x = PC1, y = PC2, label = word)) +
+  geom_point(color='steelblue') +
+  geom_text(aes(label = word), hjust = 0, vjust = 1, size = 3) +
+  theme_minimal() +
+  labs(title = "Word Embeddings Visualization (Random 200 Words after PCA)", 
+       x = "PC1", y = "PC2")
+```
+
+Most words are clustered together, with the exception of a few words that are far away from the main cluster.
+
+Some words close to each other do not really make sense, like 'crazy' and 'write'.
