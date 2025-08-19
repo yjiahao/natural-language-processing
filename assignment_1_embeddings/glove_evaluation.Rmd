@@ -1,0 +1,104 @@
+---
+title: "glove evaluation"
+author: "Jia Hao"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import libraries
+
+```{r}
+library(text2vec)
+library(readr)
+library(stringr)
+library(ggplot2)
+library(dplyr)
+```
+
+## Train best glove model
+
+```{r}
+df = read.csv(
+  '../data/twitter/processed.csv',
+  header=TRUE,
+  encoding='latin-1'
+)
+
+contents = df$processed_text[1:50000]
+
+# Remove square brackets and quotes
+df$processed_text <- str_remove_all(df$processed_text, "\\[|\\]|'")
+
+# Split by comma or space
+df$processed_text <- str_split(df$processed_text, ",\\s*")
+
+tokenized_sentences = df$processed_text
+
+# Create an iterator over the tokens
+it <- itoken(tokenized_sentences, progressbar = TRUE)
+
+# Build the vocabulary
+vocab <- create_vocabulary(it)
+
+# fit glove model
+window = 15
+rank = 128
+
+tcm <- create_tcm(it, vectorizer = vocab_vectorizer(vocab), skip_grams_window = window)
+
+# Define the GloVe model
+glove <- GlobalVectors$new(rank = rank, x_max = 10)  # rank = embedding dimensions
+
+print(paste("Window length: ", window, ", Vector dimensions: ", rank))
+
+# Fit the GloVe model
+word_vectors <- glove$fit_transform(tcm, n_iter = 10, convergence_tol = 0.01)
+
+# Combine word and context embeddings (optional)
+word_vectors <- word_vectors + t(glove$components)
+```
+
+## Read Wordsim353 data for evaluation
+
+```{r}
+wordsim = read.csv('../data/evaluation/wordsim353crowd.csv')
+
+# convert word_vectors into dataframe
+word_vectors_df <- as.data.frame(word_vectors)
+word_vectors_df$word <- rownames(word_vectors)
+rownames(word_vectors_df) <- NULL
+words_in_glove <- rownames(word_vectors)
+
+# function to compute cosine similarity
+cosine_sim <- function(w1, w2, embeddings) {
+  if (!(w1 %in% words_in_glove) | !(w2 %in% words_in_glove)) {
+    return(NA_real_)  # return NA if OOV
+  }
+  v1 <- embeddings[w1, ]
+  v2 <- embeddings[w2, ]
+  sum(v1 * v2) / (sqrt(sum(v1 * v1)) * sqrt(sum(v2 * v2)))
+}
+
+colnames(wordsim) <- c("word1", "word2", "score")
+
+results <- wordsim %>%
+  rowwise() %>%
+  mutate(
+    model_sim = cosine_sim(word1, word2, word_vectors)
+  ) %>%
+  ungroup()
+
+# Filter out OOV pairs
+results_filtered <- results %>% filter(!is.na(model_sim))
+
+pearson_corr <- cor(results_filtered$score, results_filtered$model_sim, method = "pearson")
+spearman_corr <- cor(results_filtered$score, results_filtered$model_sim, method = "spearman")
+
+cat("Pearson correlation:", pearson_corr, "\n")
+cat("Spearman correlation:", spearman_corr, "\n")
+```
+Low correlation values with the human mean values. This could suggest we require more data to train the glove vectors.
