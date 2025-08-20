@@ -16,13 +16,14 @@ library(text2vec)
 library(readr)
 library(stringr)
 library(ggplot2)
+library(dplyr)
 ```
 
 ## Read and preprocess data
 
 ```{r}
 df = read.csv(
-  '../data/twitter/processed.csv',
+  '../data/twitter/train_processed.csv',
   header=TRUE,
   encoding='latin-1'
 )
@@ -74,6 +75,54 @@ for (window in c(5, 10, 15)){
 
 ## Analysis
 
+### Evaluation of quality of embeddings of each model with Wordsim353
+
+```{r}
+# function to compute cosine similarity
+cosine_sim <- function(w1, w2, embeddings) {
+  words_in_glove <- rownames(embeddings)   # get vocab from current model
+  if (!(w1 %in% words_in_glove) | !(w2 %in% words_in_glove)) {
+    return(NA_real_)  # OOV handling
+  }
+  v1 <- embeddings[w1, ]
+  v2 <- embeddings[w2, ]
+  sum(v1 * v2) / (sqrt(sum(v1 * v1)) * sqrt(sum(v2 * v2)))
+}
+
+# Load wordsim
+wordsim <- read.csv('../data/evaluation/wordsim353crowd.csv')
+colnames(wordsim) <- c("word1", "word2", "score")
+
+# Loop over models
+results_all <- list()
+i <- 1
+for (wv in glove_vectors) {
+  results <- wordsim %>%
+    rowwise() %>%
+    mutate(
+      model_sim = cosine_sim(word1, word2, wv)
+    ) %>%
+    ungroup()
+  
+  # Filter out OOV pairs
+  results_filtered <- results %>% filter(!is.na(model_sim))
+  
+  pearson_corr <- cor(results_filtered$score, results_filtered$model_sim, method = "pearson")
+  spearman_corr <- cor(results_filtered$score, results_filtered$model_sim, method = "spearman")
+  
+  cat("Model", i, 
+      "- Pearson:", round(pearson_corr, 3), 
+      "Spearman:", round(spearman_corr, 3), "\n")
+  
+  results_all[[i]] <- list(pearson = pearson_corr, spearman = spearman_corr)
+  i <- i + 1
+}
+
+```
+
+Select model 2 as it has the highest Spearman correlation.
+Model 2 has parameters: Window length = 5 , Vector dimensions = 256
+
 ### Nearest Neighbours for selected words
 
 ```{r}
@@ -86,35 +135,33 @@ selected_words = c(
     'news'
 )
 
-for (wv in glove_vectors) {
- for (word in selected_words) {
-    cat('Word is:', word, '\n')
+best_wv = glove_vectors[[2]]
+
+for (word in selected_words) {
+  cat('Word is:', word, '\n')
+  
+  # Get vector for this word
+  vec <- best_wv[word, , drop = FALSE]
+  
+  # Compute cosine similarity with all other words
+  cos_sim = sim2(x = best_wv, y = vec, method = "cosine", norm = "l2")
+  # filter for words not the same as this word
+  cos_sim = cos_sim[rownames(cos_sim) != word, , drop = FALSE]
+  
+  print(head(sort(cos_sim[,1], decreasing = TRUE), 10))
+  
+  cat('\n')
     
-    # Get vector for this word
-    vec <- wv[word, , drop = FALSE]
-    
-    # Compute cosine similarity with all other words
-    cos_sim = sim2(x = wv, y = vec, method = "cosine", norm = "l2")
-    # filter for words not the same as this word
-    cos_sim = cos_sim[rownames(cos_sim) != word, , drop = FALSE]
-    
-    print(head(sort(cos_sim[,1], decreasing = TRUE), 10))
-    
-    cat('\n')
-    
-  }
-  cat(strrep("*", 50), "\n")
 }
 ```
 
-Based on qualitative analysis on the chosen words, best model parameters are: window length = 15, vector dimensions = 128.
-
-Nearest words for 'chemistry' and 'chocolate' do not really make much sense.
+Nearest words for 'sad' sometimes make sense.
+Nearest words for 'chemistry', 'chocolate', 'month' and 'news' do not really make much sense.
 
 ## Visualization of PCA embedding space
 
 ```{r}
-best_wv = glove_vectors[[7]]
+best_wv = glove_vectors[[2]]
 
 # Perform PCA on the full word vectors
 pca <- prcomp(best_wv, center = TRUE, scale. = TRUE)
@@ -124,7 +171,7 @@ word_vectors_pca <- data.frame(pca$x[, 1:2])
 word_vectors_pca$word <- rownames(best_wv)
 
 # Randomly sample 200 words
-set.seed(123)  # for reproducibility
+set.seed(1)  # for reproducibility
 word_vectors_pca_subset <- word_vectors_pca[sample(nrow(word_vectors_pca), 200), ]
 
 # Plot the embeddings
@@ -136,6 +183,6 @@ ggplot(word_vectors_pca_subset, aes(x = PC1, y = PC2, label = word)) +
        x = "PC1", y = "PC2")
 ```
 
-Most words are clustered together, with the exception of a few words that are far away from the main cluster.
+No obvious clusters, we can see that the words are mostly scattered over the plot.
 
-Some words close to each other do not really make sense, like 'crazy' and 'write'.
+Some words close to each other do not really make sense, like 'songz' and 'soup', or 'schooool' and 'multiplayer'.

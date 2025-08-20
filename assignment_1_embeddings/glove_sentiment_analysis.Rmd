@@ -23,29 +23,29 @@ library(randomForest)
 ## Read data and preprocess it
 
 ```{r}
-df = read.csv(
-  '../data/twitter/processed.csv',
+df_train = read.csv(
+  '../data/twitter/train_processed.csv',
   header=TRUE,
   encoding='latin-1'
 )
 
 # Remove square brackets and quotes
-df$processed_text <- str_remove_all(df$processed_text, "\\[|\\]|'")
+df_train$processed_text <- str_remove_all(df_train$processed_text, "\\[|\\]|'")
 
 # Split by comma or space
-df$processed_text <- str_split(df$processed_text, ",\\s*")
+df_train$processed_text <- str_split(df_train$processed_text, ",\\s*")
 
-tokenized_sentences = df$processed_text
+tokenized_sentences_train = df_train$processed_text
 
 # Create an iterator over the tokens
-it <- itoken(tokenized_sentences, progressbar = TRUE)
+it <- itoken(tokenized_sentences_train, progressbar = TRUE)
 
 # Build the vocabulary
 vocab <- create_vocabulary(it)
 
 # fit glove model
-window = 15
-rank = 128
+window = 5
+rank = 256
 
 tcm <- create_tcm(it, vectorizer = vocab_vectorizer(vocab), skip_grams_window = window)
 
@@ -60,6 +60,22 @@ word_vectors <- glove$fit_transform(tcm, n_iter = 10, convergence_tol = 0.01)
 # Combine word and context embeddings (optional)
 word_vectors <- word_vectors + t(glove$components)
 ```
+```{r}
+df_test = read.csv(
+  '../data/twitter/test_processed.csv',
+  header=TRUE,
+  encoding='latin-1'
+)
+
+# Remove square brackets and quotes
+df_test$processed_text <- str_remove_all(df_test$processed_text, "\\[|\\]|'")
+
+# Split by comma or space
+df_test$processed_text <- str_split(df_test$processed_text, ",\\s*")
+
+tokenized_sentences_test = df_test$processed_text
+```
+
 ## Embed sentences
 
 ```{r}
@@ -72,26 +88,20 @@ sentence_embedding <- function(tokens, embeddings) {
   colMeans(vecs)  # average across words
 }
 
-sentence_embeddings <- lapply(tokenized_sentences, sentence_embedding, embeddings = word_vectors)
-sentence_embeddings_mat <- do.call(rbind, sentence_embeddings)
-```
+sentence_embeddings_train <- lapply(tokenized_sentences_train, sentence_embedding, embeddings = word_vectors)
+X_train <- do.call(rbind, sentence_embeddings_train)
 
-## Train-test split
+sentence_embeddings_test <- lapply(tokenized_sentences_test, sentence_embedding, embeddings = word_vectors)
+X_test <- do.call(rbind, sentence_embeddings_test)
 
-```{r}
-set.seed(42)
-train_index = sample(1:nrow(df), 0.8 * nrow(df))
-
-X_train = sentence_embeddings_mat[train_index, ]
-X_test = sentence_embeddings_mat[-train_index, ]
-
-y_train <- df$target[train_index]
-y_test  <- df$target[-train_index]
+y_train <- df_train$target
+y_test <- df_test$target
 ```
 
 ## Train random forest model
 
 ```{r}
+set.seed(42)
 rf_model <- randomForest(
   x = X_train,
   y = as.factor(y_train),
@@ -113,6 +123,7 @@ cat("Test Accuracy:", accuracy, "\n")
 ## Train logistic regression model
 
 ```{r}
+set.seed(42)
 y_train = as.factor(y_train)
 y_test = as.factor(y_test)
 
@@ -136,4 +147,4 @@ accuracy <- sum(y_pred == y_test) / length(y_test)
 cat("Test Accuracy:", accuracy, "\n")
 ```
 
-Logistic Regression performs slightly better than the random forest model for sentiment analysis.
+Random Forest performs slightly better than the Logistic Regression model for sentiment analysis with GloVe.

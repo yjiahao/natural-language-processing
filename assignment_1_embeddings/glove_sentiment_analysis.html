@@ -386,29 +386,29 @@ library(dplyr)</code></pre>
 </div>
 <div id="read-data-and-preprocess-it" class="section level2">
 <h2>Read data and preprocess it</h2>
-<pre class="r"><code>df = read.csv(
-  &#39;../data/twitter/processed.csv&#39;,
+<pre class="r"><code>df_train = read.csv(
+  &#39;../data/twitter/train_processed.csv&#39;,
   header=TRUE,
   encoding=&#39;latin-1&#39;
 )
 
 # Remove square brackets and quotes
-df$processed_text &lt;- str_remove_all(df$processed_text, &quot;\\[|\\]|&#39;&quot;)
+df_train$processed_text &lt;- str_remove_all(df_train$processed_text, &quot;\\[|\\]|&#39;&quot;)
 
 # Split by comma or space
-df$processed_text &lt;- str_split(df$processed_text, &quot;,\\s*&quot;)
+df_train$processed_text &lt;- str_split(df_train$processed_text, &quot;,\\s*&quot;)
 
-tokenized_sentences = df$processed_text
+tokenized_sentences_train = df_train$processed_text
 
 # Create an iterator over the tokens
-it &lt;- itoken(tokenized_sentences, progressbar = TRUE)
+it &lt;- itoken(tokenized_sentences_train, progressbar = TRUE)
 
 # Build the vocabulary
 vocab &lt;- create_vocabulary(it)
 
 # fit glove model
-window = 15
-rank = 128
+window = 5
+rank = 256
 
 tcm &lt;- create_tcm(it, vectorizer = vocab_vectorizer(vocab), skip_grams_window = window)
 
@@ -416,12 +416,25 @@ tcm &lt;- create_tcm(it, vectorizer = vocab_vectorizer(vocab), skip_grams_window
 glove &lt;- GlobalVectors$new(rank = rank, x_max = 10)  # rank = embedding dimensions
 
 print(paste(&quot;Window length: &quot;, window, &quot;, Vector dimensions: &quot;, rank))</code></pre>
-<pre><code>## [1] &quot;Window length:  15 , Vector dimensions:  128&quot;</code></pre>
+<pre><code>## [1] &quot;Window length:  5 , Vector dimensions:  256&quot;</code></pre>
 <pre class="r"><code># Fit the GloVe model
 word_vectors &lt;- glove$fit_transform(tcm, n_iter = 10, convergence_tol = 0.01)
 
 # Combine word and context embeddings (optional)
 word_vectors &lt;- word_vectors + t(glove$components)</code></pre>
+<pre class="r"><code>df_test = read.csv(
+  &#39;../data/twitter/test_processed.csv&#39;,
+  header=TRUE,
+  encoding=&#39;latin-1&#39;
+)
+
+# Remove square brackets and quotes
+df_test$processed_text &lt;- str_remove_all(df_test$processed_text, &quot;\\[|\\]|&#39;&quot;)
+
+# Split by comma or space
+df_test$processed_text &lt;- str_split(df_test$processed_text, &quot;,\\s*&quot;)
+
+tokenized_sentences_test = df_test$processed_text</code></pre>
 </div>
 <div id="embed-sentences" class="section level2">
 <h2>Embed sentences</h2>
@@ -434,23 +447,19 @@ word_vectors &lt;- word_vectors + t(glove$components)</code></pre>
   colMeans(vecs)  # average across words
 }
 
-sentence_embeddings &lt;- lapply(tokenized_sentences, sentence_embedding, embeddings = word_vectors)
-sentence_embeddings_mat &lt;- do.call(rbind, sentence_embeddings)</code></pre>
-</div>
-<div id="train-test-split" class="section level2">
-<h2>Train-test split</h2>
-<pre class="r"><code>set.seed(42)
-train_index = sample(1:nrow(df), 0.8 * nrow(df))
+sentence_embeddings_train &lt;- lapply(tokenized_sentences_train, sentence_embedding, embeddings = word_vectors)
+X_train &lt;- do.call(rbind, sentence_embeddings_train)
 
-X_train = sentence_embeddings_mat[train_index, ]
-X_test = sentence_embeddings_mat[-train_index, ]
+sentence_embeddings_test &lt;- lapply(tokenized_sentences_test, sentence_embedding, embeddings = word_vectors)
+X_test &lt;- do.call(rbind, sentence_embeddings_test)
 
-y_train &lt;- df$target[train_index]
-y_test  &lt;- df$target[-train_index]</code></pre>
+y_train &lt;- df_train$target
+y_test &lt;- df_test$target</code></pre>
 </div>
 <div id="train-random-forest-model" class="section level2">
 <h2>Train random forest model</h2>
-<pre class="r"><code>rf_model &lt;- randomForest(
+<pre class="r"><code>set.seed(42)
+rf_model &lt;- randomForest(
   x = X_train,
   y = as.factor(y_train),
   n_tree = 200
@@ -461,8 +470,8 @@ confusion &lt;- table(Predicted = y_pred, Actual = y_test)
 print(confusion)</code></pre>
 <pre><code>##          Actual
 ## Predicted   0   1
-##         0 625 321
-##         1 358 696</code></pre>
+##         0 631 294
+##         1 385 690</code></pre>
 <pre class="r"><code>cat(&quot;\n&quot;)</code></pre>
 <pre class="r"><code>accuracy &lt;- sum(y_pred == y_test) / length(y_test)
 cat(&quot;Test Accuracy:&quot;, accuracy, &quot;\n&quot;)</code></pre>
@@ -470,7 +479,8 @@ cat(&quot;Test Accuracy:&quot;, accuracy, &quot;\n&quot;)</code></pre>
 </div>
 <div id="train-logistic-regression-model" class="section level2">
 <h2>Train logistic regression model</h2>
-<pre class="r"><code>y_train = as.factor(y_train)
+<pre class="r"><code>set.seed(42)
+y_train = as.factor(y_train)
 y_test = as.factor(y_test)
 
 logreg_model = glm(y_train ~ .,
@@ -486,14 +496,14 @@ confusion &lt;- table(Predicted = y_pred, Actual = y_test)
 print(confusion)</code></pre>
 <pre><code>##          Actual
 ## Predicted   0   1
-##         0 683 337
-##         1 300 680</code></pre>
+##         0 633 338
+##         1 383 646</code></pre>
 <pre class="r"><code>cat(&quot;\n&quot;)</code></pre>
 <pre class="r"><code>accuracy &lt;- sum(y_pred == y_test) / length(y_test)
 cat(&quot;Test Accuracy:&quot;, accuracy, &quot;\n&quot;)</code></pre>
-<pre><code>## Test Accuracy: 0.6815</code></pre>
-<p>Logistic Regression performs slightly better than the random forest
-model for sentiment analysis.</p>
+<pre><code>## Test Accuracy: 0.6395</code></pre>
+<p>Random Forest performs slightly better than the Logistic Regression
+model for sentiment analysis with GloVe.</p>
 </div>
 
 
