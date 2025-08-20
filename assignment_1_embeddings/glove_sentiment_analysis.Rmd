@@ -1,0 +1,139 @@
+---
+title: "glove sentiment analysis"
+author: "Jia Hao"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import libraries
+
+```{r}
+library(text2vec)
+library(readr)
+library(stringr)
+library(ggplot2)
+library(dplyr)
+library(randomForest)
+```
+
+## Read data and preprocess it
+
+```{r}
+df = read.csv(
+  '../data/twitter/processed.csv',
+  header=TRUE,
+  encoding='latin-1'
+)
+
+# Remove square brackets and quotes
+df$processed_text <- str_remove_all(df$processed_text, "\\[|\\]|'")
+
+# Split by comma or space
+df$processed_text <- str_split(df$processed_text, ",\\s*")
+
+tokenized_sentences = df$processed_text
+
+# Create an iterator over the tokens
+it <- itoken(tokenized_sentences, progressbar = TRUE)
+
+# Build the vocabulary
+vocab <- create_vocabulary(it)
+
+# fit glove model
+window = 15
+rank = 128
+
+tcm <- create_tcm(it, vectorizer = vocab_vectorizer(vocab), skip_grams_window = window)
+
+# Define the GloVe model
+glove <- GlobalVectors$new(rank = rank, x_max = 10)  # rank = embedding dimensions
+
+print(paste("Window length: ", window, ", Vector dimensions: ", rank))
+
+# Fit the GloVe model
+word_vectors <- glove$fit_transform(tcm, n_iter = 10, convergence_tol = 0.01)
+
+# Combine word and context embeddings (optional)
+word_vectors <- word_vectors + t(glove$components)
+```
+## Embed sentences
+
+```{r}
+sentence_embedding <- function(tokens, embeddings) {
+  tokens <- tokens[tokens %in% rownames(embeddings)]  # keep only in-vocab words
+  if (length(tokens) == 0) {
+    return(rep(0, ncol(embeddings)))  # return zero vector if all OOV
+  }
+  vecs <- embeddings[tokens, , drop = FALSE]
+  colMeans(vecs)  # average across words
+}
+
+sentence_embeddings <- lapply(tokenized_sentences, sentence_embedding, embeddings = word_vectors)
+sentence_embeddings_mat <- do.call(rbind, sentence_embeddings)
+```
+
+## Train-test split
+
+```{r}
+set.seed(42)
+train_index = sample(1:nrow(df), 0.8 * nrow(df))
+
+X_train = sentence_embeddings_mat[train_index, ]
+X_test = sentence_embeddings_mat[-train_index, ]
+
+y_train <- df$target[train_index]
+y_test  <- df$target[-train_index]
+```
+
+## Train random forest model
+
+```{r}
+rf_model <- randomForest(
+  x = X_train,
+  y = as.factor(y_train),
+  n_tree = 200
+)
+```
+
+```{r}
+y_pred <- predict(rf_model, newdata = X_test)
+
+confusion <- table(Predicted = y_pred, Actual = y_test)
+print(confusion)
+cat("\n")
+
+accuracy <- sum(y_pred == y_test) / length(y_test)
+cat("Test Accuracy:", accuracy, "\n")
+```
+
+## Train logistic regression model
+
+```{r}
+y_train = as.factor(y_train)
+y_test = as.factor(y_test)
+
+logreg_model = glm(y_train ~ .,
+                   data = data.frame(y_train = y_train, X_train),
+                   family = binomial)
+```
+
+```{r}
+pred_probs <- predict(logreg_model, newdata = data.frame(X_test), type = "response")
+
+# Convert to class labels (threshold = 0.5 by default)
+y_pred <- ifelse(pred_probs > 0.5, levels(y_train)[2], levels(y_train)[1])
+y_pred <- factor(y_pred, levels = levels(y_train))
+
+confusion <- table(Predicted = y_pred, Actual = y_test)
+print(confusion)
+cat("\n")
+
+accuracy <- sum(y_pred == y_test) / length(y_test)
+cat("Test Accuracy:", accuracy, "\n")
+```
+
+Logistic Regression performs slightly better than the random forest model for sentiment analysis.
