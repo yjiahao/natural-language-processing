@@ -31,4 +31,23 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Now, you may navigate to `data_processing.ipynb` or `` to run the code in the notebooks.
+### Run notebooks
+
+Now, you may navigate to `data_processing.ipynb` or `finetune_BERT_LoRA.ipynb` or `finetune_BERT.ipynb` to run the code in the notebooks.
+
+### Running main finetuning file
+
+To run the full finetuning pipeline, you may use the following command as an example:
+
+```bash
+cd src
+
+python main.py \
+    --figure_output_dir ../figures \
+    --apply_lora true \
+    --hf_output_dir financial_classifier
+```
+
+`--figure_output_dir`: Where to output figures from evaluation (confusion matrix, ROC curve, Precision-Recall curve).
+`--apply_lora`: Whether to apply finetuning with LoRA or not. true or false.
+`--hf_output_dir`: Repository to save finetuned model to. Optional argument, will not perform saving if not specified.
